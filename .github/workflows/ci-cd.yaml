@@ -1,0 +1,146 @@
+# Define the CI/CD Workflow for Java code
+name: CI-CD Workflow for java code 
+
+# Trigger the workflow on pushes to the specified branch
+on:
+  push:
+    branches:
+      - main
+      
+env:
+  PROJECT_ID: 'cloudrun-project-poc' # update to your Google Cloud project ID
+  REGION: 'us-central1' # update to your region
+  REPOSITORY: 'java-repo-img-cloudrun-new'
+  SERVICE: 'java-service-cloudrun'
+  
+
+# Add "id-token" with the intended permissions.
+permissions:
+    contents: 'read'
+    id-token: 'write'
+      
+jobs:
+  # CI job
+  build:
+    runs-on: ubuntu-latest
+
+    # Define the steps to be executed in the job
+    steps:
+    # Checkout the repository to access source code
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # Set up JDK 17
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+       distribution: 'temurin'
+       java-version: '17'
+
+    # Run unit tests using maven goal
+    - name: Run unit test
+      run: mvn test
+
+    # Generate code-coverage report using jacoco
+    - name : Get code-coverage report
+      run : mvn jacoco:report
+
+    # Upload code-coverage report as an artifact
+    - name: Code Coverage Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: Code Coverage Reports
+        path: target/site/jacoco/index.html   # Code coverage report will be generate at 'target/site/jacoco/index.html'
+
+    # - name: SonarQube Scan
+    #   uses: sonarsource/sonarqube-scan-action@v2
+    #   with:
+    #       projectBaseDir: .
+    #       args: >
+    #         -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+    #         -Dsonar.sources=.
+    #         -Dsonar.host.url=${{ secrets.SONAR_HOST_URL }}
+    #         -Dsonar.java.binaries=./target/classes
+    #         -Dsonar.login=${{ secrets.SONAR_TOKEN }}
+    #   env:
+    #       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    #       SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          
+     # Check sonarqube quality gate using script to make a GET request to the SonarQube API endpoint and retrieve the status of the quality gate
+    # - name: Check SonarQube Quality Gate
+    #   run: |
+    #     status=$(curl -s "${{ secrets.SONAR_HOST_URL }}/api/qualitygates/project_status?projectKey=${{ secrets.SONAR_PROJECT_KEY }}" -u "${{ secrets.SONAR_TOKEN }}": | jq -r '.projectStatus.status')
+    #     if [[ "$status" != "OK" ]]; then
+    #        echo "SonarQube quality gate check failed." 
+    #     else
+    #        echo "SonarQube quality gate check succeeded. Continuing with the workflow..."
+    #     fi
+
+    # Once we build the package using maven as build tool the artifact generated is in jar format and store under target directory
+    - name: Build project and package jar
+      run: mvn package
+
+    - name: Authenticate to Google Cloud using OIDC
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        token_format: 'access_token'
+        workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+        service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+    - name: Authenticate Docker to Artifact Registry
+      run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+
+    - name: Build and Push Container to Artifact Registry
+      run: |
+        DOCKER_IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ github.sha }}"
+        docker build -t $DOCKER_IMAGE .
+        docker push $DOCKER_IMAGE
+
+
+    # Push to Artifact Registry if scan is successful
+    - name: Push Docker Image to Artifact Registry
+      if: success()
+      run: |
+        DOCKER_IMAGE="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ github.sha }}"
+        docker push $DOCKER_IMAGE
+
+  cd:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Authenticate to Google Cloud using OIDC
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        token_format: 'access_token'
+        workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+        service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+    
+    - name: Deploy to Cloud Run
+      run: |
+        gcloud run deploy ${{ env.SERVICE }} \
+          --image=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ github.sha }} \
+          --quiet \
+          --region=${{ env.REGION }} \
+          --project ${{ env.PROJECT_ID }} \
+          --format json \
+          --update-env-vars SERVICE_NAME="BE Service" \
+          --platform=managed \
+          --service-account github-service-test-wif@cloudrun-project-poc.iam.gserviceaccount.com \
+          --allow-unauthenticated \
+          --no-use-http2
+
+ 
+
+
+
+
+  
+     
+            
+            
+
+  
+
+   
