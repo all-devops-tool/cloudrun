@@ -5,7 +5,7 @@ name: CI-CD Workflow for java code
 on:
   push:
     branches:
-      - main
+      - main45454
       
 env:
   PROJECT_ID: 'cloudrun-project-poc' # update to your Google Cloud project ID
